@@ -25,15 +25,15 @@ library(RANN)
 coefficients <- data.frame(
     Species = c("Resineux", "Hetre", "Chene", "Pin", "Bouleau"),
     growth = c(0.025, 0.018, 0.02, 0.025, 0.08),
-    birth = c(0.75, 0.75, 0.5, 0.75, 8.5),
+    birth = c(0.75, 0.75, 0.5, 0.75, 1.5),
     mortality = c(0.0067, 0.005, 0.002, 0.006, 0.01),
     LC_growth = c(0.0167, 0.0167, 0.02, 0.022, 0.03),
-    LC_birth = c(0.0125, 0.0125, 0.016, 0.014, 0.035),
+    LC_birth = c(0.0125, 0.0125, 0.016, 0.014, 0.03),
     LC_mortality = c(0.0008, 0.0008, 0.001, 0.001, 0.012)
 )
 rownames(coefficients) <- c("Resineux", "Hetre", "Chene", "Pin", "Bouleau")
 
-basal_area = c(0.013, 0.16)
+basal_area = c(0.013, 0.14, 0.18)
 
 Volume = data.frame(
     Resineux = c(0.013, 0.16, 0.18), 
@@ -68,11 +68,10 @@ forest_new <- function(density, n_reprod = 1) {
     # Calculate the modulator
     Modulateur <- c()
     for(comp in 1:N_comp){
-        Modulateur[comp] <- sum(basal_area[comp] * (as.numeric(density[comp,])))
+        Modulateur[comp] <- basal_area[comp] * sum(as.numeric(density[comp,]))
     }
     Modulateur <- Modulateur %>% rev()
-    Modulateur <- (lag(Modulateur, default = 0) + Modulateur) %>%  rev()
-
+    Modulateur <- cumsum(Modulateur) %>%  rev()
     # Create a new matrix for the new densities
     density_new <- matrix(0, nrow = N_comp, ncol = N_sp)
     for (sp in 1:N_sp) {
@@ -111,14 +110,20 @@ forest_new_5 <- function(density, n_reprod = 1){
 }
 
 simul_forest <- function(density, T = 100, control = NULL){
-    forest <- cbind(density, Compartment = 1:nrow(density), time = 1, control = FALSE, data.frame(forest_metric(density)))
+    if(length(basal_area) < nrow(density)){stop("basal_area must have the same length as the number of compartment")}
+    #warning
+    if(length(basal_area) > nrow(density)){warning("basal_area is longer than the number of compartment")}
+    forest <- cbind(density, Compartment = 1:nrow(density), time = 1, control = FALSE, data.frame(forest_metric(density)), Extraction = NA)
     for (t in 2:T){
         if(t%%5 == 2 & !is.null(control)){
+            print(paste("control at time", t))
+            old_Biomasse = forest_metric(density)$Biomass
             density<-apply_control(density, control[[(t+3)/5]])
-            forest <- rbind(forest, cbind(density, Compartment = 1:nrow(density), time = t - 1, control = TRUE, data.frame(forest_metric(density))))
+            extraction = old_Biomasse - forest_metric(density)$Biomass
+            forest <- rbind(forest, cbind(density, Compartment = 1:nrow(density), time = t - 1, control = TRUE, data.frame(forest_metric(density)), Extraction = extraction))
         }
         density <- forest_new(density, n_reprod = 1)
-        forest <- rbind(forest, cbind(density, Compartment = 1:nrow(density), time = t, control = FALSE, data.frame(forest_metric(density))))
+        forest <- rbind(forest, cbind(density, Compartment = 1:nrow(density), time = t, control = FALSE, data.frame(forest_metric(density)), Extraction = NA))
     }
     return(forest)
 }
@@ -141,21 +146,24 @@ forest_metric <- function(density){
     Shannon= -sum(colSums(density)/N_tree * log2(colSums(density)/N_tree))
     Shannon_comp = apply(density, 1, function(x) -sum(x/N_tree * log2(x/N_tree)))
     metric <- data.frame(N_tree, Biomass, Shannon_vert, Shannon)
+    # change NA to 0
+    metric[is.na(metric)] <- 0
     colnames(metric) <- c("N_tree", "Biomass", "Shannon_vert", "Shannon")
     return(metric)
 }
 
 reform_forest <- function(forest, species_selection){
-    return(forest %>% data.frame() %>% pivot_longer(cols = species_selection, names_to = "Species", values_to = "Density") %>% mutate(Compartment = as.character(Compartment),
-        Compartment = factor(Compartment, level = rev(unique(forest$Compartment)))))
+    return(forest %>% data.frame() %>%
+        pivot_longer(cols = species_selection, names_to = "Species", values_to = "Density") %>%
+        mutate(Compartment = as.character(Compartment), Compartment = factor(Compartment, level = rev(unique(forest$Compartment)))))
 }
 
-multi_sim <- function(min = 20, max = 100, T = 200){
+multi_sim <- function(min = 20, max = 100, T = 200, N_comp = 2){
     # Simulate a lot of forest with different mixture and initial states
     all_sp <- list(c("Resineux","Bouleau"), c("Resineux","Hetre"), c("Resineux","Chene"), c("Bouleau","Hetre"),
         c("Bouleau","Chene"), c("Bouleau","Pin"), c("Hetre","Chene"), c("Hetre","Pin"), c("Chene","Pin"))
-    EI_min = matrix(min, nrow = 2, ncol = 2) %>% data.frame()
-    EI_max = matrix(max, nrow = 2, ncol = 2) %>% data.frame()
+    EI_min = matrix(min, nrow = N_comp, ncol = 2) %>% data.frame()
+    EI_max = matrix(max, nrow = N_comp, ncol = 2) %>% data.frame()
     all_EI <- list(EI_min, EI_max)
     
     forest <- data.frame()
@@ -169,22 +177,18 @@ multi_sim <- function(min = 20, max = 100, T = 200){
     }
 ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(Compartment))) +
     geom_line() +
-    scale_linetype_manual(values = c("solid", "dotted")) +
+    #scale_linetype_manual(values = c("solid", "dotted")) +
     theme_bw() +
     facet_grid(j~ paste0(association1, " - ", association2)) +
     labs(x = "Temps", y = "Densité") +
     ylim(0,300)
 }
 
-plot_dynamic <- function(unif_is, N_comp, species_selection, n_reprod = 1){
+Simple_simul <- function(unif_is, N_comp, species_selection, n_reprod = 1, control = NULL, T = 200){
     density<- matrix(rep(unif_is, N_comp * length(species_selection)), nrow = N_comp, ncol = length(species_selection)) %>% data.frame()
     colnames(density) <- species_selection
-    forest <- simul_forest(density, 200, control = NULL) %>% reform_forest(species_selection)
-    ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(Compartment))) +
-        geom_line() +
-        theme_bw() +
-        labs(x = "Temps", y = "Densité") +
-        ylim(0,300)
+    forest <- simul_forest(density, T, control = control) %>% reform_forest(species_selection)
+    return(forest)
 }
 
 # Function for the viability
