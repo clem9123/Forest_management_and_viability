@@ -1,0 +1,87 @@
+---
+title : "First analysis"
+---
+
+```{r setup, include=FALSE}
+source("function.R")
+```
+
+# Create table with x1 and x2, control, x1 (t+1), x2 (t+1), and the nearest neighbor of x1 (t+1) and x2 (t+1)
+
+```{r}
+
+```
+
+# Create the Transition matrix using the table
+
+```{r}
+M = array(0, dim = c(length(x1), length(x2), length(x1), length(x2), length(u2)))
+
+#M[table$x1/f + 1, table$x2/f + 1, table$x1_new/f + 1, table$x2_new/f +1, table$u2/fc +1] = 1
+
+for(i in 1 : nrow(table)){
+    M[table[i,1]/f + 1, table[i,2]/f + 1, table[i,6]/f + 1, table[i,7]/f +1, table[i,3]/fc +1] = 1
+}
+```
+
+# Create the matrix of size x1*x2 containing 1 or 0 if the point is viable or not
+
+## Constraint Kernel (Viability Kernel 0)
+
+```{r}
+# V matrice avec x1, x2 comme dimension et rempli par 0 ou 1 si le point est viable ou non
+V = array(0, dim = c(length(x1), length(x2)))
+for (i in x1){
+    for (j in x2){
+        H = ifelse(is.na(f_H(i,j)), 0, f_H(i,j))
+        V[i/f+1,j/f+1] = ifelse(H > 0.95 & f_Biomasse(i,j) > 550, 1, 0)
+    }
+}
+image(x1,x2,V)
+```
+
+# Viability Kernel par iteration, on s'arrete quand V_new = V
+
+```{r}
+for(t in 1:50){
+    V_new = array(0, dim = c(length(x1), length(x2)))
+    for (i in x1){
+        for (j in x2){
+            if(V[i/f+1,j/f+1] == 0){next}
+            for (k in u2){
+                if(sum(M[i/f+1,j/f+1,,,k/0.25+1] * V) == 1){
+                    V_new[i/f+1,j/f+1] = 1
+                    break
+                }
+            }
+        }
+    }
+    if(all(V == V_new)){print(t);break}
+    V = V_new
+}
+
+# graph of V as a matrix of color
+image(x1,x2,V)
+```
+
+# Look at the trajectory of some points
+
+```{r}
+X1 = 300
+X2 = 260
+
+V_df = as.data.frame(V)
+colnames(V_df) <- x1
+rownames(V_df) <- x2
+# tranform into a x1; x2, viability dataframe
+V_df <- reshape2::melt(as.matrix(V_df))
+colnames(V_df) <- c("x1", "x2", "Viable")
+ggplot() +
+    geom_point(data = V_df, aes(x = x1, y = x2, color = factor(Viable)), alpha = 0.5) +
+    # color of the point from the viability matrix but not the vector
+    scale_color_manual(values = c("red", "green")) +
+    geom_segment(data = table %>% filter(x1 %in% X1, x2 %in% X2), aes(x = x1, y = x2,xend = x1_nn, yend = x2_nn), arrow = arrow(length = unit(0.1,"cm"))) +
+    labs(x = "x1", y = "x2", title = "Trajectory of the forest") +
+    # add matrix V en background as done in image (x1)
+    theme_bw()
+```
