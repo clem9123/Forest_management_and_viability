@@ -6,15 +6,15 @@ graph_forest <- function(forest){
         geom_line() +
         theme_bw() +
         labs(x = "Temps", y = "Densité") +
-        ylim(0,300)
+        ylim(0,400)
 }
 
 # Que pour deux espèces mais donne tous les graphes
 multi_sim(N_comp = 3)
 
-basal_area = c(0.1, 0.13, 0.16)
+basal_area = c(0.013, 0.16, 0.18)
 # Autant d'espèce que l'on veut donne 1 graphe
-graph_forest(Simple_simul(unif_is = 10, N_comp = 3, species_selection = c("Resineux"))) +
+graph_forest(Simple_simul(unif_is = 10, N_comp = 3, species_selection = c("Resineux"), T = 500))
 graph_forest(Simple_simul(unif_is = 10, N_comp = 3, species_selection = c("Bouleau"))) +
 graph_forest(Simple_simul(unif_is = 10, N_comp = 3, species_selection = c("Hetre"))) +
 graph_forest(Simple_simul(unif_is = 10, N_comp = 3, species_selection = c("Chene"))) +
