@@ -52,8 +52,16 @@ Volume = data.frame(
 #--------------------------------------
 ########################################
 
+#' Forest_new
+#' 
+#' This function calculate the new density of a forest for one time step from the previous density
+#' 
+#' @param density A matrix of the density of each species in each layer
+#' @param n_reprod The number of layer where reproduction is possible
+#' @return A matrix of the new density of each species in each layer
+
 forest_new <- function(density, n_reprod = 1) {
-    N_strate = nrow(density)
+    N_layers = nrow(density)
     N_sp = ncol(density)
 
     # Extract coefficients for the given species
@@ -65,42 +73,62 @@ forest_new <- function(density, n_reprod = 1) {
     LC_birth <- coef$LC_birth
     LC_mortality <- coef$LC_mortality
 
-    # Calculate the modulator
+    # Calculate the modulator (i.e. list of the total cover density above (and containing) the layer of interest)
     Modulateur <- c()
-    for(strate in 1:N_strate){
-        Modulateur[strate] <- basal_area[strate] * sum(as.numeric(density[strate,]))
+    for(layer in 1:N_layers){
+        Modulateur[layer] <- basal_area[layer] * sum(as.numeric(density[layer,]))
     }
     Modulateur <- Modulateur %>% rev()
     Modulateur <- cumsum(Modulateur) %>%  rev()
-    print(Modulateur * 0.02)
+
     # Create a new matrix for the new densities
-    density_new <- matrix(0, nrow = N_strate, ncol = N_sp)
+    density_new <- matrix(0, nrow = N_layers, ncol = N_sp)
+
+    # Calculate the new density for each species in each layer
     for (sp in 1:N_sp) {
-        strate_reproduction <- sum(basal_area[(N_strate-n_reprod + 1):N_strate] * density[(N_strate-n_reprod +1):N_strate,sp])
+        # Total density of the cover where reproduction is possible
+        layer_reproduction <- sum(basal_area[(N_layers-n_reprod + 1):N_layers] * density[(N_layers-n_reprod +1):N_layers,sp])
+
         density_new[1,sp] <- max(0,
             (density[1,sp] + 
-            + birth[sp] * strate_reproduction * (1 - LC_birth[sp] * Modulateur[1]) +
+            # Birth
+            + birth[sp] * layer_reproduction * (1 - LC_birth[sp] * Modulateur[1]) +
+            # Mortality
             - density[1,sp] * (LC_mortality[sp] * Modulateur[2] + mortality[sp]) +
-            - growth[sp] * density[1,sp] * (1 - LC_growth[sp] * Modulateur[1])) %>% as.numeric())
-        if(N_strate > 2){
-        for(strate in 2:(N_strate - 1)){
-            density_new[strate,sp] <- max(0,
-                (density[strate,sp] + 
-                + growth[sp] * density[strate-1,sp] * (1 - LC_growth[sp] * Modulateur[strate]) +
-                - growth[sp] * density[strate,sp] * (1 - LC_growth[sp] * Modulateur[strate + 1]) +
-                - density[strate,sp] * (LC_mortality[sp] * Modulateur[strate] + mortality[sp])) %>%
+            # Growth from this layer to the next
+            - growth[sp] * density[1,sp] * (1 - LC_growth[sp] * Modulateur[2])) %>% as.numeric())
+        if(N_layers > 2){
+        for(layer in 2:(N_layers - 1)){
+            density_new[layer,sp] <- max(0,
+                (density[layer,sp] + 
+                # Growth from the previous layer
+                + growth[sp] * density[layer-1,sp] * (1 - LC_growth[sp] * Modulateur[layer]) +
+                # Growth to the next layer
+                - growth[sp] * density[layer,sp] * (1 - LC_growth[sp] * Modulateur[layer + 1]) +
+                # Mortality
+                - density[layer,sp] * (LC_mortality[sp] * Modulateur[layer + 1] + mortality[sp])) %>%
                 as.numeric())
         }}
-        density_new[N_strate,sp] <- max(0,
-            (density[N_strate,sp] + 
-            + growth[sp] * density[N_strate-1,sp] * (1 - LC_growth[sp] * Modulateur[N_strate]) +
-            - density[N_strate,sp] * mortality[sp]) %>%
+        density_new[N_layers,sp] <- max(0,
+            (density[N_layers,sp] + 
+            # Growth from the previous layer
+            + growth[sp] * density[N_layers-1,sp] * (1 - LC_growth[sp] * Modulateur[N_layers]) +
+            # Mortality
+            - density[N_layers,sp] * mortality[sp]) %>%
             as.numeric())
     }
     colnames(density_new) <- colnames(density)
     rownames(density_new) <- rownames(density)
     return(density_new)
 }
+
+#' Forest_new_5
+#' 
+#' This function calculate the new density of a forest for 5 time step from the previous density
+#' 
+#' @param density A matrix of the density of each species in each layer
+#' @param n_reprod The number of layer where reproduction is possible
+#' @return A matrix of the new density of each species in each layer
 
 forest_new_5 <- function(density, n_reprod = 1){
     Year = forest_new(density, n_reprod)
@@ -110,42 +138,71 @@ forest_new_5 <- function(density, n_reprod = 1){
     return(Year)
 }
 
+#' Simul_forest
+#' 
+#' This function simulate a forest for a given number of time step
+#' 
+#' @param density A matrix of the initial density of each species in each layer
+#' @param T The number of time step
+#' @param control A list of matrix of the density of each species in each layer for each time step where control is applied
+#' @return The forest simulated with the density of each species in each layer for each time step and the metric of the forest
+
 simul_forest <- function(density, T = 100, control = NULL){
-    if(length(basal_area) < nrow(density)){stop("basal_area must have the same length as the number of strateartment")}
-    #warning
-    if(length(basal_area) > nrow(density)){warning("basal_area is longer than the number of strateartment")}
-    forest <- cbind(density, strateartment = 1:nrow(density), time = 1, control = FALSE, data.frame(forest_metric(density)), Extraction = NA)
+    # Error if you did not give enough basal area data for the number of layer
+    if(length(basal_area) < nrow(density)){stop("basal_area must have the same length as the number of layer")}
+    # Warning if you give too much basal area data for the number of layer
+    if(length(basal_area) > nrow(density)){warning("basal_area is longer than the number of layer")}
+
+    # Get the initial state of the forest and associated metrics
+    forest <- cbind(density, layer = 1:nrow(density), time = 1, control = FALSE, data.frame(forest_metric(density)), Extraction = NA)
+
+    # Simulate the forest for T time step
     for (t in 2:T){
-        if(t%%5 == 2 & !is.null(control)){
-            print(paste("control at time", t))
+        if(t%%5 == 2 & !is.null(control)){ # Every 5 time step, apply the control beginning with the first time step
             old_Biomasse = forest_metric(density)$Biomass
             density<-apply_control(density, control[[(t+3)/5]])
-            extraction = old_Biomasse - forest_metric(density)$Biomass
-            forest <- rbind(forest, cbind(density, strateartment = 1:nrow(density), time = t - 1, control = TRUE, data.frame(forest_metric(density)), Extraction = extraction))
+            extraction = old_Biomasse - forest_metric(density)$Biomass # Calculate the extraction
+            forest <- rbind(forest, cbind(density, layer = 1:nrow(density), time = t - 1, control = TRUE, data.frame(forest_metric(density)), Extraction = extraction))
         }
         density <- forest_new(density, n_reprod = 1)
-        forest <- rbind(forest, cbind(density, strateartment = 1:nrow(density), time = t, control = FALSE, data.frame(forest_metric(density)), Extraction = NA))
+        forest <- rbind(forest, cbind(density, layer = 1:nrow(density), time = t, control = FALSE, data.frame(forest_metric(density)), Extraction = NA))
     }
     return(forest)
 }
 
+#' Apply_control
+#' 
+#' This function apply a control to a forest (control is defined as the number of trees left in each layer for each species)
+#' 
+#' @param density A matrix of the density of each species in each layer
+#' @param control A matrix of the control to apply (NA if the layer is not controlled)
+#' @return The forest density with the control applied
+
 apply_control <- function(density, control){
-    for(strate in 1:nrow(density)){
+    for(layer in 1:nrow(density)){
         for(sp in 1:ncol(density)){
-            if(is.na(control[strate, sp]) | control[strate, sp] > density[strate, sp]){next}
-            density[strate, sp] <- control[strate, sp] %>% as.numeric()
+            if(is.na(control[layer, sp]) | control[layer, sp] > density[layer, sp]){next}
+            # if the control (nb of tree to leave) is possible then apply it
+            density[layer, sp] <- control[layer, sp] %>% as.numeric()
         }
     }
     return(density)
 }
 
+#' Forest_metric
+#' 
+#' This function calculate the metric of a forest : number of trees, biomass, Shannon index
+#' 
+#' @param density A matrix of the density of each species in each layer
+#' @return A data frame with the number of trees, biomass, Shannon index
+
 forest_metric <- function(density){
-    N_strate = nrow(density)
+    N_layers = nrow(density)
     N_tree = sum(density)
-    Biomass = sum(Volume[1:N_strate,colnames(density)] * density)
+    Biomass = sum(Volume[1:N_layers,colnames(density)] * density)
     Shannon_vert = -sum(rowSums(density)/N_tree * log2(rowSums(density)/N_tree))
     Shannon= -sum(colSums(density)/N_tree * log2(colSums(density)/N_tree))
-    Shannon_strate = apply(density, 1, function(x) -sum(x/N_tree * log2(x/N_tree)))
+    ShannoN_layers = apply(density, 1, function(x) -sum(x/N_tree * log2(x/N_tree)))
     metric <- data.frame(N_tree, Biomass, Shannon_vert, Shannon)
     # change NA to 0
     metric[is.na(metric)] <- 0
@@ -153,18 +210,30 @@ forest_metric <- function(density){
     return(metric)
 }
 
+#' Reform_forest
+#' 
+#' This function reform the forest data frame to be used in ggplot by pivot longer
+#' 
+#' @param forest A data frame with the density of each species in each layer for each time step
+#' @param species_selection The species present in the forest
+#' @return A data frame with the density of each species in each layer for each time step and the layer as a factor, (columns : time, layer, Species, Density)
+
 reform_forest <- function(forest, species_selection){
     return(forest %>% data.frame() %>%
         pivot_longer(cols = species_selection, names_to = "Species", values_to = "Density") %>%
-        mutate(strateartment = as.character(strateartment), strateartment = factor(strateartment, level = rev(unique(forest$strateartment)))))
+        mutate(layer = as.character(layer), layer = factor(layer, level = rev(unique(forest$layer)))))
 }
 
-multi_sim <- function(min = 20, max = 100, T = 200, N_strate = 2){
+#' Graph_forest
+#' 
+#' This function plot the forest data frame for multiple species and layer with ggplot
+
+multi_sim <- function(min = 20, max = 100, T = 200, N_layers = 2){
     # Simulate a lot of forest with different mixture and initial states
     all_sp <- list(c("Resineux","Bouleau"), c("Resineux","Hetre"), c("Resineux","Chene"), c("Bouleau","Hetre"),
         c("Bouleau","Chene"), c("Bouleau","Pin"), c("Hetre","Chene"), c("Hetre","Pin"), c("Chene","Pin"))
-    EI_min = matrix(min, nrow = N_strate, ncol = 2) %>% data.frame()
-    EI_max = matrix(max, nrow = N_strate, ncol = 2) %>% data.frame()
+    EI_min = matrix(min, nrow = N_layers, ncol = 2) %>% data.frame()
+    EI_max = matrix(max, nrow = N_layers, ncol = 2) %>% data.frame()
     all_EI <- list(EI_min, EI_max)
     
     forest <- data.frame()
@@ -176,17 +245,29 @@ multi_sim <- function(min = 20, max = 100, T = 200, N_strate = 2){
             rbind(cbind(simul_forest(init, T, control = NULL) %>% reform_forest(all_sp[[i]]), j, association1 = all_sp[[i]][1], association2 = all_sp[[i]][2]))
         }
     }
-ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(strateartment))) +
-    geom_line() +
-    #scale_linetype_manual(values = c("solid", "dotted")) +
-    theme_bw() +
-    facet_grid(j~ paste0(association1, " - ", association2)) +
-    labs(x = "Temps", y = "Densité") +
-    ylim(0,300)
+    ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(layer))) +
+        geom_line() +
+        #scale_linetype_manual(values = c("solid", "dotted")) +
+        theme_bw() +
+        facet_grid(j~ paste0(association1, " - ", association2)) +
+        labs(x = "Temps", y = "Densité") +
+        ylim(0,300)
 }
 
-Simple_simul <- function(unif_is, N_strate, species_selection, n_reprod = 1, control = NULL, T = 200){
-    density<- matrix(rep(unif_is, N_strate * length(species_selection)), nrow = N_strate, ncol = length(species_selection)) %>% data.frame()
+#' Simple_simul
+#' 
+#' This function simulate a forest for a given number of time step with a uniform initial state, it is used to make Simul_forest easier to use
+#' 
+#' @param unif_is The uniform initial state
+#' @param N_layers The number of layer
+#' @param species_selection The species present in the forest
+#' @param n_reprod The number of layer where reproduction is possible
+#' @param control A list of matrix of the density of each species in each layer for each time step where control is applied
+#' @param T The number of time step
+#' @return The forest simulated with the density of each species in each layer for each time step and the metric of the forest
+
+Simple_simul <- function(unif_is, N_layers, species_selection, n_reprod = 1, control = NULL, T = 200){
+    density<- matrix(rep(unif_is, N_layers * length(species_selection)), nrow = N_layers, ncol = length(species_selection)) %>% data.frame()
     colnames(density) <- species_selection
     forest <- simul_forest(density, T, control = control) %>% reform_forest(species_selection)
     return(forest)
@@ -196,81 +277,81 @@ Simple_simul <- function(unif_is, N_strate, species_selection, n_reprod = 1, con
 #--------------------------------------
 ########################################
 
-transition_table <- function(N_strate, species_selection, N_cut = 1, n_reprod = 1, max_tree = 100, freq = 50){
+transition_table <- function(N_layers, species_selection, N_cut = 1, n_reprod = 1, max_tree = 100, freq = 50){
     N_sp = length(species_selection)
     init <- seq(0, max_tree, freq)
 
-    table <- expand.grid(rep(list(init), N_cut * N_sp + N_strate * N_sp))
+    table <- expand.grid(rep(list(init), N_cut * N_sp + N_layers * N_sp))
     c = 0
     for(sp in 1:N_sp){
         for(cut in 1:N_cut){
             c = c + 1
-            strate  = N_strate - N_cut + cut
-            table$test <- table[,paste0("Var", c)] >=  table[,paste0("Var", N_cut * N_sp + (sp-1) * N_strate + strate)]
+            layer  = N_layers - N_cut + cut
+            table$test <- table[,paste0("Var", c)] >=  table[,paste0("Var", N_cut * N_sp + (sp-1) * N_layers + layer)]
             table <- table %>% filter(test) %>% select(-test)
     }}
 
     # calculer les métriques
-    metric <- metric_parallel(table[,columns_etat_initial(table, N_strate, species_selection, N_cut)], N_strate, species_selection)
-    prod <- as.numeric(metric[,2]) - as.numeric(metric_parallel(table[,(N_cut * N_sp + 1):(N_cut* N_sp + N_sp * N_strate)], N_strate, species_selection)[,2]) 
-    table <- table %>% cbind(fill_parallel(table[,-c(1: N_cut * N_strate)], N_strate, species_selection))
+    metric <- metric_parallel(table[,columns_etat_initial(table, N_layers, species_selection, N_cut)], N_layers, species_selection)
+    prod <- as.numeric(metric[,2]) - as.numeric(metric_parallel(table[,(N_cut * N_sp + 1):(N_cut* N_sp + N_sp * N_layers)], N_layers, species_selection)[,2]) 
+    table <- table %>% cbind(fill_parallel(table[,-c(1: N_cut * N_layers)], N_layers, species_selection))
     metric <- cbind(metric, prod)
-    colnames(metric) <- c("N_tree", "Biomass", "Shannon_vert", "Shannon", "Shannon_strate", "Extraction")
+    colnames(metric) <- c("N_tree", "Biomass", "Shannon_vert", "Shannon", "ShannoN_layers", "Extraction")
     table <- table %>% cbind(metric)
     # plus proche voisin
-    table$etat_initial <-  table[,columns_etat_initial(table, N_strate, species_selection, N_cut)] %>% group_indices(across(everything()), .add = TRUE)
-    idx <- nn2(table[,columns_etat_initial(table, N_strate, species_selection, N_cut)], table[,(N_cut * N_sp + N_sp * N_strate + 1): (N_cut * N_sp + N_sp * N_strate + N_sp * N_strate)], k = 1)$nn.idx
+    table$etat_initial <-  table[,columns_etat_initial(table, N_layers, species_selection, N_cut)] %>% group_indices(across(everything()), .add = TRUE)
+    idx <- nn2(table[,columns_etat_initial(table, N_layers, species_selection, N_cut)], table[,(N_cut * N_sp + N_sp * N_layers + 1): (N_cut * N_sp + N_sp * N_layers + N_sp * N_layers)], k = 1)$nn.idx
     table$etat_final <- table[idx,"etat_initial"]
     return(table)
 }
 
-columns_etat_initial <- function(table, N_strate, species_selection, N_cut){
+columns_etat_initial <- function(table, N_layers, species_selection, N_cut){
     N_sp = length(species_selection)
     columns <- c()
     for(sp in 1:N_sp){
-        columns <- columns %>% append(c((N_cut * N_sp + 1 + (sp-1) * N_strate):(N_cut * N_sp + (sp-1) * N_strate + N_strate - N_cut)))
-        #columns <- columns %>% append(c((N_cut * N_sp + (sp-1) * N_strate + N_strate - N_cut + 1): (N_cut * N_sp + (sp-1) * N_strate + N_strate - N_cut + 1 + N_cut - 1)))
+        columns <- columns %>% append(c((N_cut * N_sp + 1 + (sp-1) * N_layers):(N_cut * N_sp + (sp-1) * N_layers + N_layers - N_cut)))
+        #columns <- columns %>% append(c((N_cut * N_sp + (sp-1) * N_layers + N_layers - N_cut + 1): (N_cut * N_sp + (sp-1) * N_layers + N_layers - N_cut + 1 + N_cut - 1)))
         columns <- columns %>% append(c(((sp-1) * N_cut + 1): ((sp-1) * N_cut + N_cut)))
     }
     return(columns)
 }
 
-fill_parallel <- function(x, N_strate, species_selection){
+fill_parallel <- function(x, N_layers, species_selection){
     Ncpus <- parallel::detectCores() - 1
     cl <- parallel::makeCluster(Ncpus)
     doParallel::registerDoParallel(cl)
     res <- foreach::foreach(i=1:nrow(x), .combine='rbind', .packages = c("tidyverse"),
       .export = c("forest_new_5", "forest_new", "forest_new_table", "coefficients", "basal_area")) %dopar%{
-        return(forest_new_table(x[i,], N_strate, species_selection))
+        return(forest_new_table(x[i,], N_layers, species_selection))
     }
   parallel::stopCluster(cl)
   return(res)
 }
 
-metric_parallel <- function(x, N_strate, species_selection){
+metric_parallel <- function(x, N_layers, species_selection){
     Ncpus <- parallel::detectCores() - 1
     cl <- parallel::makeCluster(Ncpus)
     doParallel::registerDoParallel(cl)
     res <- foreach::foreach(i=1:nrow(x), .combine='rbind', .packages = c("tidyverse"),
       .export = c("forest_metric_table", "forest_metric", "coefficients", "basal_area", "Volume")) %dopar%{
-        return(forest_metric_table(x[i,], N_strate, species_selection))
+        return(forest_metric_table(x[i,], N_layers, species_selection))
     }
   parallel::stopCluster(cl)
-  colnames(res) <- c("N_tree", "Biomass", "Shannon_vert", "Shannon", "Shannon_strate")
+  colnames(res) <- c("N_tree", "Biomass", "Shannon_vert", "Shannon", "Shannon_layers")
   return(res)
 }
 
-forest_new_table <- function(row_table, N_strate, species_selection){
+forest_new_table <- function(row_table, N_layers, species_selection){
     N_sp = length(species_selection)
-    density = matrix(row_table %>% as.numeric(), nrow = N_strate, ncol = N_sp) %>% data.frame()
+    density = matrix(row_table %>% as.numeric(), nrow = N_layers, ncol = N_sp) %>% data.frame()
     colnames(density) = species_selection
     density = forest_new_5(density, n_reprod = 1) %>% data.frame() %>% unlist() %>% as.numeric()
     return(density)
 }
 
-forest_metric_table <- function(row_table, N_strate, species_selection){
+forest_metric_table <- function(row_table, N_layers, species_selection){
     N_sp = length(species_selection)
-    density = matrix(row_table %>% as.numeric(), nrow = N_strate, ncol = N_sp) %>% data.frame()
+    density = matrix(row_table %>% as.numeric(), nrow = N_layers, ncol = N_sp) %>% data.frame()
     colnames(density) = species_selection
     metric = forest_metric(density)
     return(metric)
@@ -296,11 +377,11 @@ table_viability <- function(table, biomasse, shannon, ext, shannon_vert){
     return(V %>% select(Constraints, Viable, Viable_nn))
 }
 
-columns_control <- function(table, N_strate, species_selection, N_cut, i){
+columns_control <- function(table, N_layers, species_selection, N_cut, i){
     N_sp = length(species_selection)
     columns <- c()
     for(sp in 1:N_sp){
-        columns <- columns %>% append(rep(NA, N_strate - N_cut))
+        columns <- columns %>% append(rep(NA, N_layers - N_cut))
         columns <- columns %>% append(table[i,((sp-1) * N_cut + 1): ((sp-1) * N_cut + N_cut)])
     }
     return(columns)
