@@ -1,0 +1,261 @@
+---
+title : "Parametrisation du model à partir de Forceeps"
+date : "11/2023"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("Fonctions.R")
+```
+
+# Dynamique du model theorique
+
+## Coefficient du model
+
+Classes de taille en dbh (cm):
+- 1-15 cm
+- 16-30 cm
+- 31 et plus
+
+Ce qui donne comme surface terrière : (pi * dbh^2/4)
+- ((1+15)/2)^2 * pi/4 = 50.26548 cm2 = 0.005 m2
+- ((16+30)/2)^2 * pi/4 = 415.4756 cm2 = 0.04 m2
+- ((31+50)/2)^2 * pi/4 = 1288.249 cm2 = 0.13 m2
+
+```{r}
+coefficients <- data.frame(
+    Species = c("Resineux", "Hetre", "Chene", "Pin", "Bouleau"),
+    growth = c(0.025, 0.012, 0.012, 0.067, 0.01769),
+    birth = c(1.75, 1, 0.9778, 0.94, 4.2),
+    mortality = c(0.006, 0.016, 0.016518, 0.024, 0.0038),
+    LC_growth = c(0.0167, 0.024, 0.024, 0.03, 0),
+    LC_birth = c(0.0125, 0.44, 0.445, 0.05, 0.1575),
+    LC_mortality = c(0.12, 0.6, 0.6965, 1.2, 0.00001)
+)
+rownames(coefficients) <- c("Resineux", "Hetre", "Chene", "Pin", "Bouleau")
+
+basal_area = c(0.005, 0.04, 0.13)
+
+Volume = data.frame(
+    Resineux = c(0.013, 0.16, 0.18),
+    Hetre = c(0.013, 0.16, 0.18),
+    Chene = c(0.013, 0.16, 0.18),
+    Pin = c(0.013, 0.16, 0.18),
+    Bouleau = c(0.013, 0.16, 0.18))
+```
+
+## Dynamique résultante
+
+### Espèces seules
+
+```{r}
+graph_forest(Simple_simul(param, unif_is = 10, N_layers = 3, species_selection = c("Bouleau","Pin"), T = 200))
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Chene"), T = 500)) +
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Hetre"), T = 500)) +
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Bouleau"), T = 500)) +
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Pin"), T = 500))
+```
+
+# Coexistence 2 espèces
+
+```{r}
+multi_sim(N_layers = 3, T = 200, min = 10, max = 50)
+```
+
+# Coexistence 3 espèces
+
+```{r}
+multi_sim3 <- function(min = 20, max = 100, T = 200, N_layers = 2){
+    # Simulate a lot of forest with different mixture and initial states
+    all_sp <- list(c("Resineux", "Hetre", "Chene"), c("Resineux", "Hetre", "Pin"),
+    c("Resineux", "Hetre", "Bouleau"), c("Resineux", "Chene", "Pin"),
+    c("Resineux", "Chene", "Bouleau"), c("Resineux", "Pin", "Bouleau"),
+    c("Hetre", "Chene", "Pin"), c("Hetre", "Chene", "Bouleau"), c("Hetre", "Pin", "Bouleau"))
+    EI_min = matrix(min, nrow = N_layers, ncol = 3) %>% data.frame()
+    EI_max = matrix(max, nrow = N_layers, ncol = 3) %>% data.frame()
+    all_EI <- list(EI_min, EI_max)
+    
+    forest <- data.frame()
+    for (i in 1:9){
+        for(j in 1:2){
+        init = all_EI[[j]]
+        colnames(init) <- all_sp[[i]]
+        forest <- forest %>% 
+            rbind(cbind(simul_forest(init, T, control = NULL) %>% reform_forest(all_sp[[i]]), j, association = paste(all_sp[[i]], collapse = " - ")))
+        }
+    }
+    ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(layer))) +
+        geom_line() +
+        #scale_linetype_manual(values = c("solid", "dotted")) +
+        theme_bw() +
+        facet_grid(j~ association) +
+        labs(x = "Temps", y = "Densité") +
+        ylim(0,300)
+}
+```
+
+```{r}
+multi_sim3(N_layers = 3, T = 200, min = 10, max = 50)
+```
+
+# Data from Forceeps
+
+```{r}
+forceeps <- readRDS("FORCEEPS_simul.rds")
+```
+
+# Find the coef of the model to fit the data
+
+```{r}
+# Test the function
+density = matrix(10, nrow = 3, ncol = 2)
+colnames(density) <- c("Resineux", "Hetre")
+forest_new(param, density, n_reprod = 1)
+simul_forest(param, density, T = 100, control = NULL)
+```
+
+2 : Sapin
+13 : Bouleau
+17 : Hetre
+22 : Chene
+5 : Pin
+
+```{r}
+forceps <- readRDS("all_simul_50.rds")
+colnames(forceps) <- c("time", "species", "layer", "forceeps", "association")
+forceps <- forceps %>% mutate(species = case_when(species == 2 ~ "Resineux", species == 5 ~ "Pin", species == 13 ~ "Bouleau", species == 17 ~ "Hetre", species == 22 ~ "Chene"))
+forceps <- forceps %>% mutate(association = case_when(association == 2 ~ "Resineux", association == 5 ~ "Pin", association == 13 ~ "Bouleau", association == 17 ~ "Hetre", association == 22 ~ "Chene", association == "2_5", "Resineux_Pin", association == "2_13", "Resineux_Bouleau", association == "2_17", "Resineux_Hetre", association == "2_22", "Resineux_Chene", association == "5_13", "Pin_Bouleau", association == "5_17", "Pin_Hetre", association == "5_22", "Pin_Chene", association == "13_17", "Bouleau_Hetre", association == "13_22", "Bouleau_Chene", association == "17_22", "Hetre_Chene"))
+```
+
+```{r}
+density = matrix(50, nrow = 3, ncol = 1)
+
+min_fun <- function(Param){
+    forest <- data.frame()
+    for(sp in list("Resineux", "Hetre", "Chene", "Pin", "Bouleau", c("Resineux", "Hetre"),
+    c("Resineux", "Chene"), c("Resineux", "Pin"), c("Resineux", "Bouleau"), c("Hetre", "Chene"),
+    c("Hetre", "Pin"), c("Hetre", "Bouleau"), c("Chene", "Pin"), c("Chene", "Bouleau"), c("Pin", "Bouleau"))){
+        density = matrix(20, nrow = 3, ncol = length(sp))
+        colnames(density) <- sp
+        forest_n <- 
+        simul_forest(Param, density, T = 200, control = NULL) %>% select(time, layer, sp) %>% cbind(association = collapse(sp))
+        colnames(forest_n) <- c("time", "layer", "nb_trees", "species", "association")
+        forest <- forest %>% rbind(forest_n)
+    }
+    colnames(forest) <- c("time", "layer", "Kohyama", "species")
+    forest <- forest %>% left_join(forceps, by = c("time", "layer", "species"))
+    return((forest$Kohyama - forest$forceeps)^2 %>% sum(na.rm = TRUE))
+}
+
+min_fun(Param)
+```
+
+```{r}
+Param = c(0.025, 0.015, 0.012, 0.067, 0.01769, 1.75, 0.75, 0.9778, 0.94, 4.199735, 0.006, 0.005, 0.016518, 0.024, 0.03806221, 0.0167, 0.0167, 0.024, 0.2674, 0, 0.0125, 0.0125, 0.4445, 0, 0.1575092, 0.12, 0.16, 0.6965, 0, 9.584806e-06)
+result <- optim(Param, min_fun, lower = rep(0,5 * 6),upper = rep(20,5 * 6),method = "L-BFGS-B")
+result
+```
+
+```{r}
+coefficients <- matrix(param, nrow = 5, ncol = 6) %>% data.frame()
+rownames(coefficients) <- c("Resineux", "Hetre", "Chene", "Pin", "Bouleau")
+colnames(coefficients) <- c("growth", "birth", "mortality", "LC_growth", "LC_birth", "LC_mortality")
+coefficients
+param = c(coefficients[,2:7]) %>% unlist() %>% as.numeric()
+c <- matrix(param, nrow = 5, ncol = 6) %>% data.frame()
+```
+
+```{r}
+#param = result$par
+#param = c(coefficients[,2:7]) %>% unlist() %>% as.numeric()
+graph_forest(Simple_simul(param,unif_is = 20, N_layers = 3, species_selection = c("Bouleau"), T = 200)) +
+    geom_line(data = forceps %>% filter(species == "Bouleau"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Chene"), T = 200)) +
+    geom_line(data = forceps %>% filter(species == "Chene"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Pin"), T = 200)) +
+    geom_line(data = forceps %>% filter(species == "Pin"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black")
+
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Hetre"), T = 200)) +
+    geom_line(data = forceps %>% filter(species == "Hetre"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+graph_forest(Simple_simul(param, unif_is = 20, N_layers = 3, species_selection = c("Resineux"), T = 200)) +
+    geom_line(data = forceps %>% filter(species == "Resineux"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+```
+
+```{r}
+forest <- data.frame()
+for(sp in c("Resineux", "Hetre", "Chene", "Pin")){
+    colnames(density) <- sp
+    forest_n <- 
+    simul_forest(density, T = 100, control = NULL) %>% select(time, layer, sp) %>% cbind(species = sp)
+    colnames(forest_n) <- c("time", "layer", "nb_trees", "species")
+    forest <- forest %>% rbind(forest_n)
+}
+colnames(forest) <- c("time", "layer", "Kohyama", "species")
+forest <- forest %>% left_join(forceeps_bouleau, by = c("time", "layer", "species"))
+```
+
+```{r}
+ggplot(forest) +
+    geom_line(aes(x = time, y = Kohyama, linetype = factor(layer)), color = "red") +
+    geom_line(aes(x = time, y = forceeps, linetype = factor(layer))) +
+    facet_grid(~ species) +
+    theme_bw()
+```
+
+```{r}
+library(caret)
+library(MASS)
+
+fit <- lda(Species ~ ., data = iris)
+model <- predict(fit)$class
+
+irisTabs <- table(model, iris$Species)
+
+## When passing factors, an error occurs with more
+## than two levels
+sensitivity(model, iris$Species)
+
+## When passing a table, more than two levels can
+## be used
+sensitivity(irisTabs, "versicolor")
+specificity(irisTabs, c("setosa", "virginica"))
+```
+
+```{r}
+param = c(0.025, 0.015, 0.012, 0.067, 0.01769, 1.75, 0.75, 0.9778, 0.94, 4.199735, 0.006, 0.005, 0.016518, 0.024, 0.03806221, 0.0167, 0.0167, 0.024, 0.2674, 0, 0.0125, 0.0125, 0.4445, 0, 0.1575092, 0.12, 0.16, 0.6965, 0, 9.584806e-06)
+```
+
+
+# reunion
+Rajouter 100 ans au moins
+Tester d'autres début de forêt
+Bugmann 
+calibration avec les equilibre, aller voir Forceeps
+Bouleau : 64
+Chene :115
+
+Dynamique du système (quiver mathlab) Lundi matin ou après 16h
+
+perchis < 27.5
+moyen < 67.5
+gros > 67.5
+
+```{r}
+# faire un tableau des données pour toutes les espèces 
+forest <- multi_sim(N_layers = 3, T = 499, min = 20, max = 50)
+head(forest)
+forest <- forest %>% mutate(association = paste0(association1,"_", association2))
+forest <- forest %>% select(- Extraction, -association1, -association2, -control) # j : états initiaux
+# simulation pour chaque espèces
+forest_unique <- multi_sim(N_layers = 3, T = 499, min = 20, max = 50)
+head(forest_unique)
+forest_unique <- forest_unique %>% mutate(association = association1)
+forest_unique <- forest_unique %>% select(- Extraction, -association1, -association2, -control) # j : états initiaux
+
+forest <- rbind(forest, forest_unique)
+
+saveRDS(forest, "forest.rds")
+```

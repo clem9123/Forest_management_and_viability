@@ -52,19 +52,14 @@ Volume = data.frame(
 #--------------------------------------
 ########################################
 
-#' Forest_new
-#' 
-#' This function calculate the new density of a forest for one time step from the previous density
-#' 
-#' @param density A matrix of the density of each species in each layer
-#' @param n_reprod The number of layer where reproduction is possible
-#' @return A matrix of the new density of each species in each layer
-
-forest_new <- function(density, n_reprod = 1) {
+forest_new <- function(param, density, n_reprod = 1) {
     N_layers = nrow(density)
     N_sp = ncol(density)
 
     # Extract coefficients for the given species
+    coefficients <- matrix(param, nrow = 5, ncol = 6) %>% data.frame()
+    rownames(coefficients) <- c("Resineux", "Hetre", "Chene", "Pin", "Bouleau")
+    colnames(coefficients) <- c("growth", "birth", "mortality", "LC_growth", "LC_birth", "LC_mortality")
     coef <- coefficients[colnames(density), ]
     growth <- coef$growth
     birth <- coef$birth
@@ -92,9 +87,9 @@ forest_new <- function(density, n_reprod = 1) {
         density_new[1,sp] <- max(0,
             (density[1,sp] + 
             # Birth
-            + birth[sp] * layer_reproduction * (1 - LC_birth[sp] * Modulateur[1]) +
+            + birth[sp] * (1 - LC_birth[sp] * Modulateur[1]) +
             # Mortality
-            - density[1,sp] * (LC_mortality[sp] * Modulateur[2] + mortality[sp]) +
+            - density[1,sp] * mortality[sp] * (LC_mortality[sp] * Modulateur[2] + 1) +
             # Growth from this layer to the next
             - growth[sp] * density[1,sp] * (1 - LC_growth[sp] * Modulateur[2])) %>% as.numeric())
         if(N_layers > 2){
@@ -106,7 +101,7 @@ forest_new <- function(density, n_reprod = 1) {
                 # Growth to the next layer
                 - growth[sp] * density[layer,sp] * (1 - LC_growth[sp] * Modulateur[layer + 1]) +
                 # Mortality
-                - density[layer,sp] * (LC_mortality[sp] * Modulateur[layer + 1] + mortality[sp])) %>%
+                - density[layer,sp] * mortality[sp] * (LC_mortality[sp] * Modulateur[layer + 1] + 1)) %>%
                 as.numeric())
         }}
         density_new[N_layers,sp] <- max(0,
@@ -122,32 +117,7 @@ forest_new <- function(density, n_reprod = 1) {
     return(density_new)
 }
 
-#' Forest_new_5
-#' 
-#' This function calculate the new density of a forest for 5 time step from the previous density
-#' 
-#' @param density A matrix of the density of each species in each layer
-#' @param n_reprod The number of layer where reproduction is possible
-#' @return A matrix of the new density of each species in each layer
-
-forest_new_5 <- function(density, n_reprod = 1){
-    Year = forest_new(density, n_reprod)
-    for(i in 1:4){
-        Year = forest_new(Year, n_reprod)
-    }
-    return(Year)
-}
-
-#' Simul_forest
-#' 
-#' This function simulate a forest for a given number of time step
-#' 
-#' @param density A matrix of the initial density of each species in each layer
-#' @param T The number of time step
-#' @param control A list of matrix of the density of each species in each layer for each time step where control is applied
-#' @return The forest simulated with the density of each species in each layer for each time step and the metric of the forest
-
-simul_forest <- function(density, T = 100, control = NULL){
+simul_forest <- function(param, density, T = 200, control = NULL){
     # Error if you did not give enough basal area data for the number of layer
     if(length(basal_area) < nrow(density)){stop("basal_area must have the same length as the number of layer")}
     # Warning if you give too much basal area data for the number of layer
@@ -164,10 +134,26 @@ simul_forest <- function(density, T = 100, control = NULL){
             extraction = old_Biomasse - forest_metric(density)$Biomass # Calculate the extraction
             forest <- rbind(forest, cbind(density, layer = 1:nrow(density), time = t - 1, control = TRUE, data.frame(forest_metric(density)), Extraction = extraction))
         }
-        density <- forest_new(density, n_reprod = 1)
+        density <- forest_new(param, density, n_reprod = 1)
         forest <- rbind(forest, cbind(density, layer = 1:nrow(density), time = t, control = FALSE, data.frame(forest_metric(density)), Extraction = NA))
     }
     return(forest)
+}
+
+#' Forest_new_5
+#' 
+#' This function calculate the new density of a forest for 5 time step from the previous density
+#' 
+#' @param density A matrix of the density of each species in each layer
+#' @param n_reprod The number of layer where reproduction is possible
+#' @return A matrix of the new density of each species in each layer
+
+forest_new_5 <- function(param, density, n_reprod = 1){
+    Year = forest_new(param, density, n_reprod)
+    for(i in 1:4){
+        Year = forest_new(param, Year, n_reprod)
+    }
+    return(Year)
 }
 
 #' Apply_control
@@ -242,16 +228,10 @@ multi_sim <- function(min = 20, max = 100, T = 200, N_layers = 2){
         init = all_EI[[j]]
         colnames(init) <- all_sp[[i]]
         forest <- forest %>% 
-            rbind(cbind(simul_forest(init, T, control = NULL) %>% reform_forest(all_sp[[i]]), j, association1 = all_sp[[i]][1], association2 = all_sp[[i]][2]))
+            rbind(cbind(simul_forest(param, init, T, control = NULL) %>% reform_forest(all_sp[[i]]), j, association1 = all_sp[[i]][1], association2 = all_sp[[i]][2]))
         }
     }
-    ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(layer))) +
-        geom_line() +
-        #scale_linetype_manual(values = c("solid", "dotted")) +
-        theme_bw() +
-        facet_grid(j~ paste0(association1, " - ", association2)) +
-        labs(x = "Temps", y = "Densité") +
-        ylim(0,300)
+    return(forest)
 }
 
 #' Simple_simul
@@ -266,11 +246,26 @@ multi_sim <- function(min = 20, max = 100, T = 200, N_layers = 2){
 #' @param T The number of time step
 #' @return The forest simulated with the density of each species in each layer for each time step and the metric of the forest
 
-Simple_simul <- function(unif_is, N_layers, species_selection, n_reprod = 1, control = NULL, T = 200){
+Simple_simul <- function(param, unif_is, N_layers, species_selection, n_reprod = 1, control = NULL, T = 200){
     density<- matrix(rep(unif_is, N_layers * length(species_selection)), nrow = N_layers, ncol = length(species_selection)) %>% data.frame()
     colnames(density) <- species_selection
-    forest <- simul_forest(density, T, control = control) %>% reform_forest(species_selection)
+    forest <- simul_forest(param, density, T, control = control) %>% reform_forest(species_selection)
     return(forest)
+}
+
+#' Graph_forest
+#' 
+#' This function plot the forest data frame for multiple species and layer with ggplot
+#' 
+#' @param forest A data frame with the density of each species in each layer for each time step
+#' @return A ggplot object
+
+graph_forest <- function(forest){
+    ggplot(forest, aes(x = time, y = Density, color = Species, linetype = factor(layer))) +
+        geom_line() +
+        theme_bw() +
+        labs(x = "Temps", y = "Densité") +
+        ylim(0,100)
 }
 
 # Function for the viability
@@ -322,7 +317,7 @@ fill_parallel <- function(x, N_layers, species_selection){
     doParallel::registerDoParallel(cl)
     res <- foreach::foreach(i=1:nrow(x), .combine='rbind', .packages = c("tidyverse"),
       .export = c("forest_new_5", "forest_new", "forest_new_table", "coefficients", "basal_area")) %dopar%{
-        return(forest_new_table(x[i,], N_layers, species_selection))
+        return(forest_new_table(param, x[i,], N_layers, species_selection))
     }
   parallel::stopCluster(cl)
   return(res)
@@ -341,11 +336,11 @@ metric_parallel <- function(x, N_layers, species_selection){
   return(res)
 }
 
-forest_new_table <- function(row_table, N_layers, species_selection){
+forest_new_table <- function(param,row_table, N_layers, species_selection){
     N_sp = length(species_selection)
     density = matrix(row_table %>% as.numeric(), nrow = N_layers, ncol = N_sp) %>% data.frame()
     colnames(density) = species_selection
-    density = forest_new_5(density, n_reprod = 1) %>% data.frame() %>% unlist() %>% as.numeric()
+    density = forest_new_5(param,density, n_reprod = 1) %>% data.frame() %>% unlist() %>% as.numeric()
     return(density)
 }
 
