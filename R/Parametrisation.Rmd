@@ -1,0 +1,440 @@
+---
+title : "Parametrisation du model à partir de Forceeps"
+date : "11/2023"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("Fonctions.R")
+```
+
+## Original parameters and dynamic of the theoretical model
+
+Classes de taille en dbh (cm):
+- 0-22.5 cm
+- 22.5-67.5 cm
+- 67.5 cm et plus
+
+Ce qui donne comme surface terrière : (pi * dbh^2/4)
+- ((0+0.225)/2)^2 * pi/4 = 0.01 m2
+- ((0.225+0.675)/2)^2 * pi/4 = 0.16 m2
+- ((0.675+1.50)/2)^2 * pi/4 = 0.9
+
+```{r}
+basal_area = c(0.01, 0.16, 0.9)
+L_sp = c(3,3,3,2,3,3)
+
+Volume = data.frame(
+    Sapin = c(0.01, 0.18, 0.9),
+    Epicea = c(0.01, 0.18, 0.9),
+    Hetre = c(0.01, 0.18, 0.9),
+    Chene = c(0.01, 0.18, 0.9),
+    Pin = c(0.01, 0.18, 0.9),
+    Bouleau = c(0.01, 0.18, 0.9))
+```
+
+# Parameters directly extracted from litterature/Forceeps equations
+
+## Mortality 
+
+Defined in Forceeps as the inverse of the tree life expectancy with a factor c = 4.605
+It gives : m = c/A_max
+
+```{r}
+mortality_table <- data.frame(Species = c("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene"),
+    Amax = c(366, 150, 400, 300, 200, 600)) %>% mutate(
+    mortality = 4.605/Amax)
+```
+
+## Growth
+
+```{r}
+growth <- function(d, Hmax, g, s){
+    b = 1.37
+    bmax = Hmax - 1.37
+    h <- b + (Hmax-b) * (1 - exp(-(s * d)/(Hmax - b)))
+    G = g * (d * (1 - h/Hmax))/(2 * Hmax - bmax * exp(((-s * d)/bmax) * (2+(-s * d)/bmax)))
+    return(G)
+}
+Hmax = 50
+g = 350
+s = 75
+Growth_table <- data.frame(V1 = growth(seq(0, 0.7, 0.01))) %>% cbind(species = "Sapin")
+Hmax = 48
+g = 355
+s = 83
+Growth_table <-  Growth_table %>% rbind(data.frame(V1 = growth(seq(0, 0.7, 0.01))) %>% cbind(species = "Epicea"))
+Hmax = 35
+g = 150
+s = 58
+Growth_table <- Growth_table %>% rbind(data.frame(V1 = growth(seq(0, 0.7, 0.01))) %>% cbind(species = "Pin"))
+Hmax = 20
+g = 278
+s = 103
+Growth_table <- Growth_table %>% rbind(data.frame(V1 = growth(seq(0, 0.7, 0.01))) %>% cbind(species = "Bouleau"))
+Hmax = 50
+g = 260
+s = 76
+Growth_table <- Growth_table %>% rbind(data.frame(V1 = growth(seq(0, 0.7, 0.01))) %>% cbind(species = "Hetre"))
+Hmax = 35
+g = 146
+s = 60
+Growth_table <- Growth_table %>% rbind(data.frame(V1 = growth(seq(0, 0.7, 0.01))) %>% cbind(species = "Chene"))
+colnames(Growth_table) <- c("V1", "species")
+Growth_table$x = seq(0, 0.7, 0.01)
+# virer bouleau plus grand que 0.3
+Growth_table <- Growth_table %>% filter(!(species == "Bouleau" & x > 0.3)) %>%
+    # nom latins
+    mutate(species = case_when(species == "Sapin" ~ "Abies alba",
+    species == "Epicea" ~ "Picea abies", species == "Pin" ~ "Pinus sylvestris",
+    species == "Bouleau" ~ "Betula pendula", species == "Hetre" ~ "Fagus sylvatica",
+    species == "Chene" ~ "Quercus pubescens"))
+ggplot(Growth_table, aes(x = x * 100, y = V1, color = species)) +
+    geom_line() +
+    theme_bw() +
+    # ligne vertical à 0.13
+    geom_vline(xintercept = 11.25, linetype = "dashed") +
+    # et à 0.47
+    geom_vline(xintercept = 47.5, linetype = "dashed") +
+    ylim(0,2) +
+    labs(x = "Diameter(cm)", y = "Growth(cm)", color = "Species")
+
+# tableau avec les valeurs de growth1 et growth2 pour chaque espèce
+growth1 <- c(growth(0.1125, 50, 350, 75), growth(0.1125, 48, 355, 83), growth(0.1125, 35, 150, 58), growth(0.1125, 20, 278, 103), growth(0.1125, 50, 260, 76), growth(0.1125, 35, 146, 60))
+growth2 <- c(growth(0.475, 50, 350, 75), growth(0.475, 48, 355, 83), growth(0.475, 35, 150, 58), growth(0.475, 20, 278, 103), growth(0.475, 50, 260, 76), growth(0.475, 35, 146, 60))
+species = c("Abies alba", "Picea abies", "Pinus sylvestris", "Betula pendula", "Fagus sylvatica", "Quercus pubescens")
+growth_table <- data.frame(species, growth1, growth2) %>% arrange(species)
+
+growth_table %>% mutate(proba_tansi1 = growth1/22.5, proba_tansi2 = growth2/45)
+```
+
+
+# Climate
+
+```{r}
+# climate
+climate <- read.table("forceps.constantclimate.Bern")
+colnames(climate) <- c("date", "month", "tmean", "tmin", "tmax", "sumPrec", "nbRainyDays")
+
+library(tidyverse)
+
+ggplot(climate %>% filter(date < 301) %>% group_by(date) %>% summarise(tmin = min(tmean), tmax = max(tmean), tmean = mean(tmean)) %>% pivot_longer(cols = c("tmin", "tmax", "tmean"), names_to = "variable", values_to = "value"),
+    aes(x = date, y = value, color = variable)) +
+    geom_line() +
+    theme_bw() +
+    labs(x = "Time (year)", y = "Temperature (°C)", color = "Temperature", title = "Temperature evolution for our simulation time") +
+    # rename the legend label individual
+    scale_color_discrete(labels = c("Minimum", "Maximum", "Mean", "Sum")) +
+    # don't show the legend
+    theme(legend.position = "none") +
+
+
+# prec
+
+ggplot(climate %>% filter(date < 301) %>% group_by(date) %>% summarise(minPrec = min(sumPrec), maxPrec = max(sumPrec), meanPrec = mean(sumPrec), sumPrec = sum(sumPrec)) %>% pivot_longer(cols = c("minPrec", "maxPrec", "meanPrec", "sumPrec"), names_to = "variable", values_to = "value"),
+    aes(x = date, y = value, color = variable)) +
+    geom_line() +
+    theme_bw() +
+    labs(x = "Time (year)", y = "Precipitation (mm)", color = "", title = "Precipitation evolution for our simulation time") +
+    # rename the legend label individual
+    scale_color_discrete(labels = c("Minimum", "Maximum", "Mean", "Sum"))
+```
+
+
+# Data from Forceeps
+
+0 : Sapin
+2 : Epicea
+13 : Bouleau
+17 : Hetre
+22 : Chene
+5 : Pin
+
+```{r}
+import_forceps <- function(init){
+    forceps <- readRDS(paste0("all_simul_", init,".rds"))
+    colnames(forceps) <- c("time", "species", "layer", "forceeps", "association")
+    forceps <- forceps %>%
+        mutate(species = case_when(species == 0 ~ "Sapin", species == 2 ~ "Epicea", species == 5 ~ "Pin",
+        species == 13 ~ "Bouleau", species == 17 ~ "Hetre", species == 22 ~ "Chene"))
+    forceps <- forceps %>% mutate(association = case_when(
+        association == "0_2" ~ "Sapin_Epicea",
+        association == "0_5" ~ "Sapin_Pin",
+        association == "0_13" ~ "Sapin_Bouleau",
+        association == "0_17" ~ "Sapin_Hetre",
+        association == "0_22" ~ "Sapin_Chene",
+        association == "2_5" ~ "Epicea_Pin",
+        association == "2_13" ~ "Epicea_Bouleau",
+        association == "2_17" ~ "Epicea_Hetre",
+        association == "2_22" ~ "Epicea_Chene",
+        association == "5_13" ~ "Pin_Bouleau",
+        association == "5_17" ~ "Pin_Hetre",
+        association == "5_22" ~ "Pin_Chene",
+        association == "13_17" ~ "Bouleau_Hetre",
+        association == "13_22" ~ "Bouleau_Chene",
+        association == "17_22" ~ "Hetre_Chene",
+        association == "0" ~ "Sapin",
+        association == "2" ~ "Epicea",
+        association == "5" ~ "Pin",
+        association == "13" ~ "Bouleau",
+        association == "17" ~ "Hetre",
+        association == "22" ~ "Chene")) #%>%
+        #filter(!(association %in% c("Sapin", "Sapin_Epicea", "Sapin_Pin", "Sapin_Bouleau", "Sapin_Hetre", "Sapin_Chene")))
+    # ra#jouter tous les layers pour les espèces qui ne sont pas dans toutes les layers, 
+    # et remplir avec 0
+    forceps <- forceps %>% group_by(time, species, association) %>% complete(layer = 1:3, fill = list(forceeps = 0))
+    forceps <- forceps %>% filter(time < 301)
+    return(forceps)
+}
+
+forceps <- import_forceps("50")
+# organiser l'ordre des espèces
+forceps_10 <- forceps_10 %>% mutate(association = factor(association, levels = c("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene",
+"Sapin_Epicea", "Sapin_Pin", "Sapin_Bouleau", "Sapin_Hetre", "Sapin_Chene", "Epicea_Pin", "Epicea_Bouleau",
+"Epicea_Hetre", "Epicea_Chene", "Pin_Bouleau", "Pin_Hetre", "Pin_Chene", "Bouleau_Hetre", "Bouleau_Chene",
+"Hetre_Chene")))
+# organiser l'ordre des layers
+forceps_10 <- forceps_10 %>% mutate(layer = factor(layer, levels = c("3", "2", "1")))
+forceps_50 <- import_forceps("50")
+```
+
+```{r}
+ggplot(forceps %>% filter((association %in% c("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene")))) +
+    geom_line(aes(x = time, y = forceeps, linetype = factor(layer), color = species)) +
+    facet_wrap(~ association) +
+    # manual linetype
+    scale_linetype_manual(values = c("solid", "dashed", "dotted")) +
+    theme_bw() +
+    labs(x = "Time (year)", y = "Nb of trees", color = "Species", linetype = "Layer")
+```
+
+# Optimisation
+
+```{r}
+min_fun <- function(Param){
+    LCg = Param[1]
+    LCb = Param[2]
+    LCm = Param[3]
+
+    coefficients <- data.frame(
+        growth1 = c(0.5, 0.5, 0.29, 0.5, 0.37, 0.28),
+        growth2 = c(0.96, 0.9, 0.53, 0, 0.71, 0.5),
+        birth = c(60, 60, 60, 60, 60, 60),
+        mortality = c(0.0013, 0.015, 0.023, 0.031, 0.012, 0.008),
+        LC_growth = LCg * c(1, 5, 9, 9, 1, 8),
+        LC_birth = LCb * c(3, 5, 3, 7, 3, 7),
+        LC_mortality = LCm * c(1, 5, 9, 9, 1, 8)
+    )
+    rownames(coefficients) <- c("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene")
+    colnames(coefficients) <- c("growth1", "growth2", "birth", "mortality", "LC_growth", "LC_birth", "LC_mortality")
+    forest <- data.frame()
+    for(sp in list("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene", "Sapin_Epicea",
+    c("Sapin","Pin"), c("Sapin","Bouleau"), c("Sapin","Hetre"), c("Sapin","Chene"), c("Epicea","Pin"), c("Epicea","Bouleau"),
+    c("Epicea","Hetre"), c("Epicea","Chene"), c("Pin","Bouleau"), c("Pin","Hetre"), c("Pin","Chene"), c("Bouleau","Hetre"),
+    c("Bouleau","Chene"), c("Hetre","Chene"))){
+        density = matrix(100, nrow = 3, ncol = length(sp))
+        colnames(density) <- sp
+        forest_n <- simul_forest_fast(coefficients, density, T = 300)  %>%
+            cbind(association = paste0(sp, collapse = "_"))
+        forest <- forest %>% rbind(forest_n)
+    }
+    forest <- forest %>% left_join(forceps, by = c("time", "layer", "species", "association"))
+    dist = (forest$nb_trees - forest$forceeps)^2 %>% sum(na.rm = TRUE)
+    print(dist)
+    return(min(10^200, dist))
+}
+
+par =  c(0.0016, 0.0038, 0.001)
+min_fun(par)
+```
+
+```{r}
+# nombre de coeur
+library(optimParallel)
+time = Sys.time()
+# make cluster
+cl <- makeCluster(8)
+clusterExport(cl, c("min_fun", "forceps", "simul_forest", "par", "forest_new", "basal_area","L_sp"))
+clusterEvalQ(cl, library("tidyverse"))
+result <- optimParallel(
+    c(0.01, 0.01, 0.01),
+    min_fun,
+    lower = c(0, 0, 0),
+    upper = c(0.2, 0.2 , 0.2),
+    method = "L-BFGS-B",
+    control = list(maxit = 100), parallel = list(cl = cl))
+stopCluster(cl)
+result
+print(Sys.time() - time)
+```
+
+```{r}
+# 0.001795596 0.004039088 0.024589931 dist = 186051160
+# 0.0002892997 0.0030908340 0.0185549158 dis = 185172820
+LCg = 0.0018
+LCb = 0.004
+LCm = 0.025
+coefficients <- data.frame(
+    growth1 = c(0.5, 0.5, 0.29, 0.5, 0.37, 0.28),
+    growth2 = c(0.96, 0.9, 0.53, 0, 0.71, 0.5),
+    birth = c(60, 60, 60, 60, 60, 60),
+    mortality = c(0.0013, 0.015, 0.023, 0.031, 0.012, 0.008),
+    LC_growth = LCg * c(1, 5, 9, 9, 1, 8),
+    LC_birth = LCb * c(3, 5, 3, 7, 3, 7),
+    LC_mortality = LCm * c(1, 5, 9, 9, 1, 8)
+)
+rownames(coefficients) <- c("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene")
+colnames(coefficients) <- c("growth1","growth2", "birth", "mortality", "LC_growth", "LC_birth", "LC_mortality")
+```
+
+```{r}
+graph_forest(Simple_simul(coefficients, unif_is = 100, N_layers = 3, species_selection = c("Chene"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Chene"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    ylim(0, 600) +
+graph_forest(Simple_simul(coefficients, unif_is = 100, N_layers = 3, species_selection = c("Pin"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Pin"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    ylim(0, 600) +
+graph_forest(Simple_simul(coefficients, unif_is = 100, N_layers = 3, species_selection = c("Hetre"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Hetre"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    ylim(0, 600) +
+graph_forest(Simple_simul(coefficients, unif_is = 100, N_layers = 3, species_selection = c("Epicea"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Epicea"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    ylim(0, 600) +
+graph_forest(Simple_simul(coefficients, unif_is = 100, N_layers = 3, species_selection = c("Sapin"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Sapin"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    ylim(0, 600) +
+graph_forest(Simple_simul(coefficients, unif_is = 100, N_layers = 3, species_selection = c("Bouleau"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Bouleau"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    ylim(0, 600)
+
+```
+
+```{r}
+graph_forest(Simple_simul(coefficients,unif_is = 10, N_layers = 3, species_selection = c("Bouleau", "Chene"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Bouleau_Chene"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    facet_grid(species~.) +
+    ylim(0,500) +
+graph_forest(Simple_simul(coefficients,unif_is = 10, N_layers = 3, species_selection = c("Pin", "Chene"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Pin_Chene"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    facet_grid(species~.) +
+    ylim(0,500) +
+graph_forest(Simple_simul(coefficients,unif_is = 10, N_layers = 3, species_selection = c("Pin", "Hetre"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Pin_Hetre"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    facet_grid(species~.) +
+    ylim(0,500) +
+graph_forest(Simple_simul(coefficients,unif_is = 10, N_layers = 3, species_selection = c("Bouleau", "Hetre"), T = 300)) +
+    geom_line(data = forceps %>% filter(association == "Bouleau_Hetre"), aes(x = time, y = forceeps, linetype = factor(layer)), color = "black") +
+    facet_grid(species~.) +
+    ylim(0,500)
+```
+
+# Simulation Foret
+
+```{r}
+ggplot(multi_sim(N_layers = 3, T = 200, min = 50), aes(x = time, y = Density, color = Species, linetype = factor(layer))) +
+        geom_line() +
+        #scale_linetype_manual(values = c("solid", "dotted")) +
+        theme_bw() +
+        facet_wrap(~ paste0(association1, "_", association2)) +
+        labs(x = "Temps", y = "Densité") +
+        ylim(0,400)
+```
+
+```{r}
+multi_sim_unique <- function(min = 0, T = 200, N_layers = 2){
+    # Simulate a lot of forest with different mixture and initial states
+    all_sp <- list("Sapin", "Chene", "Hetre", "Bouleau", "Pin", "Epicea")
+    EI = matrix(min, nrow = N_layers, ncol = 1) %>% data.frame()
+    
+    forest <- data.frame()
+    for (i in 1:length(all_sp)){
+        init = EI
+        colnames(init) <- all_sp[[i]]
+        forest <- forest %>% 
+            rbind(cbind(simul_forest(coefficients, init, T, control = NULL) %>% reform_forest(all_sp[[i]]), association1 = all_sp[[i]]))
+    }
+    return(forest)
+}
+
+ggplot(multi_sim_unique(N_layers = 3, T = 200, min = 50), aes(x = time, y = Density, color = Species, linetype = factor(layer))) +
+        geom_line() +
+        #scale_linetype_manual(values = c("solid", "dotted")) +
+        theme_bw() +
+        facet_wrap(~ paste0(association1)) +
+        labs(x = "Temps", y = "Densité") +
+        ylim(0,400)
+```
+
+# Dynamiqe du model
+
+```{r}
+source("Fonctions.R")
+
+basal_area = c(0.01, 0.16, 0.9)
+L_sp = c(3,3,3,2,3,3)
+
+Volume = data.frame(
+    Sapin = c(0.01, 0.18, 0.9),
+    Epicea = c(0.01, 0.18, 0.9),
+    Hetre = c(0.01, 0.18, 0.9),
+    Chene = c(0.01, 0.18, 0.9),
+    Pin = c(0.01, 0.18, 0.9),
+    Bouleau = c(0.01, 0.18, 0.9))
+
+LCg = 0.0018
+LCb = 0.004
+LCm = 0.025
+coefficients <- data.frame(
+    growth1 = c(0.5, 0.5, 0.29, 0.5, 0.37, 0.28),
+    growth2 = c(0.96, 0.9, 0.53, 0, 0.71, 0.5),
+    birth = c(60, 60, 60, 60, 60, 60),
+    mortality = c(0.0013, 0.015, 0.023, 0.031, 0.012, 0.008),
+    LC_growth = LCg * c(1, 5, 9, 9, 1, 8),
+    LC_birth = LCb * c(3, 5, 3, 7, 3, 7),
+    LC_mortality = LCm * c(1, 5, 9, 9, 1, 8)
+)
+rownames(coefficients) <- c("Sapin", "Epicea", "Pin", "Bouleau", "Hetre", "Chene")
+colnames(coefficients) <- c("growth1","growth2", "birth", "mortality", "LC_growth", "LC_birth", "LC_mortality")
+```
+
+```{r}
+transition_table <- function(N_layers = 3, species_selection, N_cut = 1, n_reprod = 1, max_tree = 100, freq = 50){
+    N_sp = length(species_selection)
+    init <- seq(0, max_tree, freq)
+
+    table <- expand.grid(rep(list(init), N_layers * N_sp))
+    #c = 0
+    #for(sp in 1:N_sp){
+    #    for(cut in 1:N_cut){
+    #        c = c + 1
+    #        layer  = N_layers - N_cut + cut
+    #        table$test <- table[,paste0("Var", c)] >=  table[,paste0("Var", N_cut * N_sp + (sp-1) * N_layers + layer)]
+    #        table <- table %>% filter(test) %>% select(-test)
+    #}}
+
+    # calculer les métriques
+    table <- table %>% cbind(fill_parallel(table, N_layers, species_selection))
+    # plus proche voisin
+    #table$etat_initial <-  table[,columns_etat_initial(table, N_layers, species_selection, N_cut)] %>% group_indices(across(everything()), .add = TRUE)
+    #idx <- nn2(table[,columns_etat_initial(table, N_layers, species_selection, N_cut)], table[,(N_cut * N_sp + N_sp * N_layers + 1): (N_cut * N_sp + N_sp * N_layers + N_sp * N_layers)], k = 1)$nn.idx
+    #table$etat_final <- table[idx,"etat_initial"]
+    return(table)
+}
+
+# sans control ??
+time = Sys.time()
+table <- transition_table(3, c("Chene", "Epicea"), N_cut = 0, n_reprod = 1, max_tree = 1500, freq = 500)
+print(Sys.time() - time)
+```
+
+```{r}
+# filtrer le columns 7 à 12
+# quelles sont les columns avec > 800
+
+table %>% filter_all(any_vars(. > 1500))
+# maximum de chaque les columns
+table[7:12] %>% summarise_all(max)
+```
