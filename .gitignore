@@ -1,0 +1,9 @@
+# ignore files
+*.Rproj.user
+*.RData
+*.Rhistory
+*.Ruserdata
+*.Rproj
+
+# Ignore Brouillon folder
+/Brouillon/
