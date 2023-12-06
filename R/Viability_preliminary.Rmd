@@ -1,0 +1,345 @@
+---
+title : "Analyses of the initial states and constraints"
+date : "Finit 28/11/2023"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("R/Functions/Model.R")
+source("R/Functions/Viability.R")
+library(plotly)
+library(plot3D)
+```
+
+# Model Dynamic
+
+```{r}
+# ajouter les colonnes d'états de F_idx
+phase_diagram <- function(sp, max_tree){
+    N_sp = length(sp)
+    IS <- state_combinatory(species_selection = sp, N_sp = N_sp, pas = 5, max_tree = max_tree)
+    FS <- fill_parallel(IS, N_layers = 3, species_selection = sp)
+    IS_idx <- 1:nrow(IS)
+    FS_idx <- nn2(IS, FS, k = 1)$nn.idx
+    FS <- FS[FS_idx, ]
+    colnames(FS) <- c(paste0("Var", 1:(3*N_sp), ".y"))
+    colnames(IS) <- c(paste0("Var", 1:(3*N_sp), ".x"))
+    tottable <- cbind(IS, FS)
+
+    #visualisation des synamique en 2D pour les diff valeus de Var1.x
+    tottable %>%
+        ggplot() +
+        #geom_point(aes(x = Var2.x, y = Var3.x)) +
+        geom_segment(aes(x = Var2.x, y = Var3.x, xend = Var2.y, yend = Var3.y, color = Var1.y > 1100),
+                     arrow = arrow(length = unit(2, "mm"))) +
+        scale_color_manual(values = c("black", "red")) +
+        theme_bw() +
+        facet_wrap(~Var1.x) +
+        labs(title = paste0("Phase diagram of ", latin_name[sp, "latin"]))
+}
+
+for (sp in c("Sapin", "Epicea", "Chene", "Hetre", "Bouleau", "Pin")){
+    ggsave(paste0("Figures/Dynamic/Phase_diagram_", latin_name[sp, "latin"], ".png"), phase_diagram(sp, max_tree = c(600, 200, 100)), width = 10, height = 10)
+}
+```
+
+# Valus of the metric in the initial states
+
+```{r}
+# calculer les valeurs des métriques dans les états initiaux
+N_sp = 1
+sp = "Sapin"
+N_layers = 3
+N_cut = 2
+IS <- state_combinatory(species_selection = sp, N_sp = N_sp, pas = 5, max_tree = c(600, 200, 100))
+Metric <- metric_parallel(IS, N_layers = N_layers, species_selection = sp)
+IS <- cbind(IS, Metric)
+
+ggplot(IS) +
+geom_point(aes(x = Var2, y = Var3, color = shannon_vert), size = 8) +
+theme_bw() +
+scale_color_viridis_c() +
+labs(title = "Values of vertical shannon in the initial states") +
+facet_wrap(~Var1)
+```
+
+
+# Viability kernel
+
+```{r}
+N_sp = 2
+N_layers = 3
+N_cut = 2
+trans_table <- transition_table(species_selection = c("Chene", "Pin"), pas = 5, max_tree = c(600, 200, 100))
+saveRDS(trans_table, "Data/table_ChenePin.RDS")
+```
+
+# VIABILITY
+
+```{r}
+viab_result <- table_viability(trans_table,  vol_wood = 0, ba = 0, shannon = 0, ext = 80, shannon_vert = 0)
+table <- cbind(trans_table, viab_result)
+
+# State viability table
+col_init = c(paste0("Var", 1:(N_sp * (N_layers - N_cut))), paste0("Var", (N_sp * (N_layers - N_cut) + 1):(N_sp * N_layers), ".x"))
+V_table <- table %>% group_by(across(all_of(col_init))) %>% summarize(Viable = sum(Viable)/n(), Constraints = sum(Constraints)/n())
+
+# le faire sur les controls aussi
+col_control = c(paste0("Var", 1:(N_sp * (N_layers - N_cut))), paste0("Var", (N_sp * (N_layers - N_cut) + 1):(N_sp * N_layers), ".y"))
+V_table_control <- table %>% group_by(across(all_of(col_control))) %>% summarize(Viable = sum(Viable)/n(), Constraints = sum(Constraints)/n())
+
+
+print(paste0("il y a : ", V_table %>% filter(Viable > 0) %>% nrow(), " états viables sur ", V_table %>% nrow(), " states"))
+print(paste0("il y a : ", V_table_control %>% filter(Viable > 0) %>% nrow(), " controls viables sur ", V_table_control %>% nrow(), " controls"))
+```
+
+```{r}
+# viability in state space
+V_table %>% filter(Var1 == 480, Var2 == 480, Var3.x == 160) %>% plot_ly(x = ~Var4.x, y = ~Var5.x, z = ~Var6.x, color = ~Viable >0, colors = c("red", "green")) %>% add_markers() %>% layout(scene = list(xaxis = list(title = "Chene l2"), yaxis = list(title = "Sapin l3"), zaxis = list(title = "Chene l3")))
+
+# Viability in control space
+V_table_control %>% filter(Var3.y == 0) %>% plot_ly(x = ~Var4.y, y = ~Var5.y, z = ~Var6.y, color = ~Viable, colors = c("red", "green"), type = "scatter3d", mode = "markers") %>% layout(scene = list(xaxis = list(title = "Chene l2"), yaxis = list(title = "Sapin l3"), zaxis = list(title = "Chene l3")))
+
+# Viability in control metric space
+V_table_control_metric <- table %>% group_by(control_shannon, control_shannon_vert, control_density_tot) %>% summarize(Viable = sum(Viable)/n(), Constraints = sum(Constraints)/n())
+
+plot_ly(data = V_table_control_metric %>% filter(Viable > 0), x = ~control_shannon, y = ~control_shannon_vert, z = ~control_density_tot, color = ~Viable, colors = c("red", "green"), type = "scatter3d", mode = "markers", marker = list(size = 5)) %>%
+    add_markers(data = V_table_control_metric %>% filter(Viable == 0), marker = list(size = 2, color = grey, opacity = 0.5))
+
+```
+
+# extract one viable trajectory
+
+```{r}
+plot_trj <- function(){
+table_v <- table
+traj <- table_v %>% filter(Viable > 0) %>% sample_n(1)
+for(i in 1:20){
+    traj <- traj %>% rbind(table_v %>% filter(Init_state_idx == traj$Final_state_idx[i] & Viable > 0) %>% sample_n(1))
+}
+# Pour faire la vraie simul : a partir de traj
+N_layers = 3
+N_sp = 2
+N_cut = 2
+species_selection = c("Sapin", "Chene")
+density <- matrix(traj[1,columns("Initial_State",N_layers, N_cut, N_sp)] %>% as.numeric(), nrow = N_layers, ncol = N_sp, byrow = TRUE) %>% data.frame()
+colnames(density) <- species_selection
+control = list()
+for(i in 1:nrow(traj)){
+    control[[i]] <- matrix(traj[i,c("Var1","Var2","Var3.y","Var4.y","Var5.y","Var6.y")] %>% as.numeric(), nrow = N_layers, ncol = N_sp, byrow = TRUE) %>% data.frame()
+    colnames(control[[i]]) <- species_selection
+}
+
+forest <- simul_forest(coefficients, density, T = 100, control = control) %>% reform_forest(species_selection)
+forest[is.na(forest)] <- 0
+ggplot(forest, aes(x = time, y = density, color = species, linetype = factor(layer))) +
+    geom_line() +
+    theme_bw() +
+    labs(x = "Temps", y = "Densité")
+}
+
+plot_trj()
+
+#ggplot(forest, aes(x = time, y = density, color = species, linetype = factor(layer))) +
+#    geom_line() +
+#    theme_bw() +
+#    labs(x = "Temps", y = "Densité") +
+#    geom_line(data = traj, aes(x = (5*(0:(nrow(traj)-1)) + 1), y = Var1), color = "blue", linetype = "dashed") +
+#    geom_line(data = traj, aes(x = (5*(0:(nrow(traj)-1)) + 1), y = Var2), color = "#d54ee3", linetype = "dashed" ) +
+#    geom_line(data = traj, aes(x = (5*(0:(nrow(traj)-1)) + 1), y = Var3.x), color = "blue", linetype = "dotted") +
+#    geom_line(data = traj, aes(x = (5*(0:(nrow(traj)-1)) + 1), y = Var4.x), color = "#d54ee3", linetype = "dotted") +
+#    geom_line(data = traj, aes(x = (5*(0:(nrow(traj)-1)) + 1), y = Var5.x), color = "blue", linetype = "solid") +
+#    geom_line(data = traj, aes(x = (5*(0:(nrow(traj)-1)) + 1), y = Var6.x), color = "#d54ee3", linetype = "solid")
+#traj %>% ggplot(aes( x = 1:nrow(traj))) +
+#    geom_line(aes(y = shannon), color = "blue", linetype = "dashed")
+```
+
+# Analyses by diversity of control
+
+```{r}
+ggplot(table) +
+geom_density(aes(x = shannon_vert, color = factor(Viable)), alpha = 0.5, show.legend = FALSE) +
+geom_density(aes(x = shannon_vert)) +
+theme_bw() +
+labs(title = "Density of vertical shannon in and out the Viability kernel") +
+ggplot(table) +
+geom_density(aes(x = extraction, color = factor(Viable)), alpha = 0.5, show.legend = FALSE) +
+geom_density(aes(x = extraction)) +
+theme_bw() +
+labs(title = "Density of extraction in and out the Viability kernel") +
+ggplot(table) +
+geom_density(aes(x = shannon, color = factor(Viable)), alpha = 0.5) +
+geom_density(aes(x = shannon)) +
+theme_bw() +
+labs(title = "Density of shannon in and out the Viability kernel")
+```
+# Sensibility to constraints
+
+```{r}
+Shannon = seq(0,1,0.2)
+Biomass = seq(0,800,5)
+Extraction = seq(0,800,5)
+Shannon_vert = seq(0,1.5,0.2)
+sensibilite <- data.frame()
+# tester la sensibilité aux différentes contraintes
+for(s in Shannon){
+    for(b in Biomass){
+        for(p in Extraction){
+            for(sv in Shannon_vert){
+            table_v <- table_viability(table, b, s, p, sv)
+            sensibilite <- rbind(sensibilite,
+                c(s,b,p,sv,table_v %>% filter(Constraints == 1) %>% nrow(),
+                table_v %>% filter(Viable == 1) %>% nrow()))
+            }
+        }
+    }
+}
+colnames(sensibilite) <- c("Shannon", "Biomass", "Extraction", "Shannon_vert", "Constraints", "Viable")
+saveRDS(sensibilite, "Data/sensibilite_SapinChene.RDS")
+```
+
+```{r}
+sensibilite %>% filter(Shannon_vert == 0) %>% plot_ly(x = ~Shannon, y = ~Biomass, z = ~Extraction, color = ~Viable, colors = c("red", "green")) %>% add_markers()
+```
+
+# Read les plotly pour les capturer
+
+```{r}
+plotly_state_spece_SapinChene_flexi <- readRDS("Figures/Viability_kernel/plotly_state_spece_SapinChene_flexi.RDS")
+readRDS("Figures/Viability_kernel/plotly_state_spece_SapinChene.RDS")
+readRDS("Figures/Viability_kernel/plotly_control_metricspace_SapinChene_flexi.RDS")
+
+# save as 3D object
+htmlwidgets::saveWidget(plotly_state_spece_SapinChene_flexi,
+    "Figures/Viability_kernel/plotly_state_spece_SapinChene_flexi.html")
+```
+
+# comparaison diversité/extraction
+
+```{r}
+Control_div <- V_table_control %>% filter(Viable >0)
+Control_ext <- V_table_control %>% filter(Viable >0)
+```
+
+```{r}
+Control_div %>% nrow()
+Control_ext %>% nrow()
+
+# quels control (définit par les colonnes 1 à 6) sont viables pour les deux contraintes
+Control_div[, 1:6] %>% intersect(Control_ext[, 1:6]) -> Control_div_ext
+
+ggplot(Control_div_ext) +
+    geom_point(aes(x = Var1, y = Var2))
+table(Control_div_ext$Var1, Control_div_ext$Var2)
+table(Control_div_ext$Var5.y, Control_div_ext$Var6.y)
+table(Control_div_ext$Var3.y, Control_div_ext$Var4.y)
+
+ggplot(Control_div_ext %>% pivot_longer(cols = c(Var1, Var2, Var3.y, Var4.y, Var5.y, Var6.y), names_to = "Var", values_to = "Value") %>% mutate(Var = factor(Var, levels = c("Var1", "Var2", "Var3.y", "Var4.y", "Var5.y", "Var6.y"), labels = c("Sapin l1", "Chene l1", "Sapin l2", "Chene l2", "Sapin l3", "Chene l3"))) %>% group_by(Var, Value) %>% summarize(N = n())) +
+    geom_point(aes(x = Var, y = Value, size = N)) +
+    theme_bw()
+```
+
+```{r}
+N_sp = 2
+N_cut = 2
+N_layers = 3
+trans_table <- readRDS("Data/table_SapinChene.RDS")
+viab_result <- table_viability(trans_table,  vol_wood = 10, ba = 0, shannon = 0.8, ext = 0, shannon_vert = 0.9)
+table <- cbind(trans_table, viab_result)
+col_control = c(paste0("Var", 1:(N_sp * (N_layers - N_cut))), paste0("Var", (N_sp * (N_layers - N_cut) + 1):(N_sp * N_layers), ".y"))
+V_table_control <- table %>% group_by(across(all_of(col_control))) %>% summarize(Viable = sum(Viable)/n(), Constraints = sum(Constraints)/n())
+Control_ext <- V_table_control %>% filter(Viable >0)
+Control_ext <- Control_ext %>% select(Var1, Var2, Var3.y, Var4.y, Var5.y, Var6.y)
+# récuperer les indices de table pour lesquels on a les controls dans Control_div_ext
+# c'est à dire les colonnes Var1, Var2, Var3.y, Var4.y, Var5.y, Var6.y sont dans 
+table %>% filter(Var1 %in% Control_ext$Var1, Var2 %in% Control_ext$Var2, Var3.y %in% Control_ext$Var3.y, Var4.y %in% Control_ext$Var4.y, Var5.y %in% Control_ext$Var5.y, Var6.y %in% Control_ext$Var6.y) -> table_div_ext
+nrow(table_div_ext)
+
+which(data.frame(t(table_div_ext[, c("Var1", "Var2", "Var3.y", "Var4.y", "Var5.y", "Var6.y")])) %in% data.frame(t(Control_ext))) -> indices
+
+table_div_ext <- table_div_ext[indices, ] %>% filter(Viable >0)
+
+Control_ext$idx <- 1:nrow(Control_ext)
+nrow(Control_ext)
+```
+
+```{r}
+# récuperer les trajectoires possible entre les controls viables
+# Quest ce que je peux faire comme control viable à partir de chaque control viable
+# donner un indice à chaque control viable ! plusieurs control sont pareils
+# pour chaque control viable, je regarde les controls viables suivants
+# je fais ça pour chaque control viable
+
+#table_div_ext <- readRDS("Data/table_div_ext.RDS")
+
+
+table_div_ext %>% left_join(Control_ext, by = c("Var1", "Var2", "Var3.y", "Var4.y", "Var5.y", "Var6.y")) -> table_div_ext
+
+table_div_ext %>% select(idx, Final_state_idx, Init_state_idx) -> table_div_ext
+
+# faire la matrice de transition entre les controls viables 
+
+#saveRDS(table_div_ext, "Data/table_div_ext.RDS")
+#saveRDS(Control_ext, "Data/Control_ext.RDS")
+
+
+# Créer une matrice de transition
+transition_matrix <- matrix(0, nrow = max(table_div_ext$idx), ncol = max(table_div_ext$idx))
+
+# Parcourir le tableau et mettre à jour la matrice
+for (i in 1:23) {
+    table_div_ext %>% filter(idx == i) %>% pull(Final_state_idx) -> index
+    table_div_ext %>% filter(Init_state_idx %in% index) %>% pull(idx) -> index
+    transition_matrix[i, index] <- 1
+}
+
+# Afficher la matrice de transition
+print(transition_matrix)
+```
+
+# Comparaison
+
+```{r}
+N_sp = 2
+N_cut = 2
+N_layers = 3
+trans_table <- readRDS("Data/table_SapinChene.RDS")
+viab_result <- table_viability(trans_table,  vol_wood = 0, ba = 0, shannon = 0, ext = 80, shannon_vert = 0)
+table_ext <- cbind(trans_table, viab_result)
+```
+
+```{r}
+ggplot(table_div %>% filter(Viable > 0)) +
+    geom_boxplot(aes(x = "shannon", y = shannon * 100, color = "diversity"), fill = "#ff000000") +
+    geom_boxplot(aes(x = "extraction", y = extraction, color = "diversity"), fill = "#ff000000") +
+    geom_boxplot(aes(x = "shannon_vert", y = shannon_vert * 100, color = "diversity"), fill = "#ff000000") +
+    geom_boxplot(data = table_ext %>% filter(Viable >0), aes(x = "shannon", y = shannon * 100, color = "extraction"), fill = "#ff000000") +
+    geom_boxplot(data = table_ext %>% filter(Viable >0), aes(x = "extraction", y = extraction, color = "extraction"), fill = "#ff000000") +
+    geom_boxplot(data = table_ext %>% filter(Viable >0), aes(x = "shannon_vert", y = shannon_vert * 100, color = "extraction"), fill = "#ff000000") +
+    theme_bw() +
+    labs(title = "Distribution of the metrics in the viability kernel", color = "Constraint", y = "Extraction") +
+    # faire une echelle à droite dix fois plus petite pour shannon
+    scale_y_continuous(sec.axis = sec_axis(~./100, name = "shannon"))
+
+# pour faire le graph en mieux : faire un tableau avec les valeurs de shannon, extraction et shannon_vert
+tot_table <- rbind(table_div %>% filter(Viable > 0) %>% mutate(Constraint = "diversity"), table_ext %>% filter(Viable > 0) %>% mutate(Constraint = "extraction"))
+
+ggplot(tot_table) + # wiyth a spece between the boxplot of the diff constraints
+    geom_boxplot(aes(x = "Shannon", y = shannon * 200, color = Constraint), fill = "#ff000000", position = position_dodge(width = 1.1)) +
+    geom_boxplot(aes(x = "Extraction", y = extraction, color = Constraint), fill = "#ff000000", position = position_dodge(width = 1.1)) +
+    geom_boxplot(aes(x = "Shannon_vert", y = shannon_vert * 200, color = Constraint), fill = "#ff000000", position = position_dodge(width = 1.1)) +
+    # change position
+    theme_bw() +
+    labs(title = "Distribution of the metrics in the viability kernel", color = "Constraint", y = "Extraction") +
+    # faire une echelle à droite dix fois plus petite pour shannon
+    scale_y_continuous(sec.axis = sec_axis(~./200, name = "shannon"))
+```
+
+```{r}
+```
+
+```{r}
+```
